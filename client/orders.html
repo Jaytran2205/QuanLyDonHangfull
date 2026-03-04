@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Đơn xuất hàng - Quản Lý Nội Bộ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <script type="module">
+      import { api, formatCurrency, layoutTemplate, showToast, showConfirm, requireAuth } from "/assets/app.js";
+      import { showInvoicePrintModal } from "/invoice-template.js";
+
+      let customers = [];
+      let products = [];
+      let items = [];
+      let nextItemId = 0;
+
+      function getProductPrices(customerId) {
+        const customer = customers.find((c) => c._id === customerId);
+        if (!customer || !customer.productPrices) return new Map();
+        return new Map(Object.entries(customer.productPrices || {}));
+      }
+
+      function addItemRow() {
+        const customerId = document.getElementById("customerId").value;
+        if (!customerId) {
+          showToast("Vui lòng chọn khách hàng trước", "error");
+          return;
+        }
+
+        const itemId = nextItemId++;
+        items.push({
+          id: itemId,
+          productId: "",
+          quantity: 1,
+          price: null
+        });
+
+        renderItemsTable();
+      }
+
+      function removeItem(itemId) {
+        items = items.filter((item) => item.id !== itemId);
+        renderItemsTable();
+      }
+
+      function updateItemProduct(itemId, productId) {
+        const item = items.find((i) => i.id === itemId);
+        if (!item) return;
+
+        item.productId = productId;
+
+        // Auto-fill price from customer's productPrices if available
+        if (productId) {
+          const customerId = document.getElementById("customerId").value;
+          const productPrices = getProductPrices(customerId);
+          const existingPrice = productPrices.get(productId);
+          if (existingPrice !== undefined) {
+            item.price = existingPrice;
+          } else {
+            item.price = null;
+          }
+        }
+      }
+
+      function updateItemQuantity(itemId, quantity) {
+        const item = items.find((i) => i.id === itemId);
+        if (item) {
+          item.quantity = Math.max(1, Number(quantity) || 1);
+        }
+      }
+
+      function updateItemPrice(itemId, price) {
+        const item = items.find((i) => i.id === itemId);
+        if (item) {
+          item.price = price ? Number(price) : null;
+        }
+      }
+
+      function calculateGrandTotal() {
+        return items.reduce((sum, item) => {
+          if (item.productId && item.price !== null) {
+            return sum + item.price * item.quantity;
+          }
+          return sum;
+        }, 0);
+      }
+
+      function renderItemsTable() {
+        const tableBody = document.getElementById("itemsTableBody");
+        const grandTotalText = document.getElementById("grandTotalText");
+        const itemsEmpty = document.getElementById("itemsEmpty");
+
+        // Save currently focused element and its value
+        const focusedElement = document.activeElement;
+        const focusedAction = focusedElement?.getAttribute("data-action");
+        const focusedItemId = focusedElement?.getAttribute("data-item-id");
+        const focusedValue = focusedElement?.value;
+        const focusedCursorPos = focusedElement?.selectionStart;
+
+        tableBody.innerHTML = items
+          .map((item) => {
+            const product = products.find((p) => p._id === item.productId);
+            const itemTotal = item.price !== null ? item.price * item.quantity : 0;
+
+            return `
+              <tr class="order-item-row">
+                <td class="p-3">
+                  <select class="input-base w-full text-sm" data-item-id="${item.id}" data-action="product-change">
+                    <option value="">-- Chọn sản phẩm --</option>
+                    ${products
+                      .map((p) => `<option value="${p._id}" ${p._id === item.productId ? "selected" : ""}>${p.name}</option>`)
+                      .join("")}
+                  </select>
+                </td>
+                <td class="p-3">
+                  <input 
+                    type="number" 
+                    min="1" 
+                    value="${item.quantity}" 
+                    class="input-base w-20 text-sm" 
+                    data-item-id="${item.id}" 
+                    data-action="quantity-change"
+                  />
+                </td>
+                <td class="p-3">
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    placeholder="Giá" 
+                    value="${item.price !== null ? item.price : ""}" 
+                    class="input-base w-24 text-sm" 
+                    data-item-id="${item.id}" 
+                    data-action="price-change"
+                    ${!item.productId ? "disabled" : ""}
+                  />
+                </td>
+                <td class="p-3 text-right">
+                  <span class="font-semibold">${formatCurrency(itemTotal)}</span>
+                </td>
+                <td class="p-3 text-center">
+                  <button 
+                    type="button" 
+                    class="px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-sm" 
+                    data-item-id="${item.id}" 
+                    data-action="remove-item"
+                  >
+                    Xóa
+                  </button>
+                </td>
+              </tr>
+            `;
+          })
+          .join("");
+
+        const grandTotal = calculateGrandTotal();
+        grandTotalText.textContent = formatCurrency(grandTotal);
+
+        // Show/hide empty message
+        if (itemsEmpty) {
+          itemsEmpty.style.display = items.length === 0 ? "block" : "none";
+        }
+
+        // Re-attach event listeners
+        document.querySelectorAll("[data-action]").forEach((el) => {
+          el.removeEventListener("change", handleItemTableEvent);
+          el.removeEventListener("input", handleItemTableEvent);
+          el.removeEventListener("click", handleItemTableEvent);
+          el.addEventListener("change", handleItemTableEvent);
+          el.addEventListener("input", handleItemTableEvent);
+          el.addEventListener("click", handleItemTableEvent);
+        });
+
+        // Restore focus to the same element
+        if (focusedItemId && focusedAction) {
+          setTimeout(() => {
+            const restoredElement = document.querySelector(`[data-item-id="${focusedItemId}"][data-action="${focusedAction}"]`);
+            if (restoredElement) {
+              restoredElement.focus();
+              // Restore cursor position if it's an input
+              if (focusedCursorPos !== undefined && restoredElement.setSelectionRange) {
+                restoredElement.setSelectionRange(focusedCursorPos, focusedCursorPos);
+              }
+            }
+          }, 0);
+        }
+      }
+
+      function handleItemTableEvent(event) {
+        event.stopPropagation();
+        const action = event.currentTarget.getAttribute("data-action");
+        const itemId = Number(event.currentTarget.getAttribute("data-item-id"));
+
+        if (action === "product-change") {
+          const newValue = event.currentTarget.value;
+          updateItemProduct(itemId, newValue);
+          
+          // Update price input directly without re-rendering the whole table
+          const item = items.find((i) => i.id === itemId);
+          if (item && item.price !== null) {
+            const priceInput = document.querySelector(`[data-item-id="${itemId}"][data-action="price-change"]`);
+            if (priceInput) {
+              priceInput.value = item.price;
+              priceInput.disabled = false;
+            }
+          }
+          
+          // Render after user finishes selecting (blur event)
+          event.currentTarget.addEventListener("blur", () => {
+            renderItemsTable();
+          }, { once: true });
+        } else if (action === "quantity-change") {
+          const newValue = event.currentTarget.value;
+          updateItemQuantity(itemId, newValue);
+          updateGrandTotalDisplay();
+          // Render when user leaves this input
+          event.currentTarget.addEventListener("blur", () => {
+            renderItemsTable();
+          }, { once: true });
+        } else if (action === "price-change") {
+          const newValue = event.currentTarget.value;
+          updateItemPrice(itemId, newValue);
+          updateGrandTotalDisplay();
+          // Render when user leaves this input
+          event.currentTarget.addEventListener("blur", () => {
+            renderItemsTable();
+          }, { once: true });
+        } else if (action === "remove-item") {
+          removeItem(itemId);
+          return;
+        }
+      }
+
+      function updateGrandTotalDisplay() {
+        const grandTotal = calculateGrandTotal();
+        const grandTotalText = document.getElementById("grandTotalText");
+        if (grandTotalText) {
+          grandTotalText.textContent = formatCurrency(grandTotal);
+        }
+      }
+
+      function updateCustomerState() {
+        items = [];
+        nextItemId = 0;
+        renderItemsTable();
+      }
+
+      async function submitOrder(event) {
+        event.preventDefault();
+
+        const customerId = document.getElementById("customerId").value;
+        const exportDate = document.getElementById("exportDate").value;
+        const savePrices = document.getElementById("savePrices").checked;
+        const invoiceFile = document.getElementById("invoice").files[0];
+
+        if (!customerId) {
+          showToast("Vui lòng chọn khách hàng", "error");
+          return;
+        }
+
+        if (items.length === 0) {
+          showToast("Vui lòng thêm ít nhất 1 sản phẩm", "error");
+          return;
+        }
+
+        // Validate all items have product and price
+        for (const item of items) {
+          if (!item.productId) {
+            showToast("Vui lòng chọn sản phẩm cho tất cả dòng", "error");
+            return;
+          }
+          if (item.price === null || item.price <= 0) {
+            showToast("Vui lòng nhập giá hợp lệ cho tất cả sản phẩm", "error");
+            return;
+          }
+        }
+
+        if (!invoiceFile) {
+          const confirmedNoInvoice = await showConfirm(
+            "Xác nhận không thêm ảnh",
+            "Bạn có chắc chắn không thêm ảnh hóa đơn không?"
+          );
+          if (!confirmedNoInvoice) {
+            return;
+          }
+        }
+
+        const formData = new FormData();
+        formData.append("customerId", customerId);
+        formData.append("exportDate", exportDate);
+        formData.append("savePrices", String(savePrices));
+        formData.append("items", JSON.stringify(items));
+        if (invoiceFile) {
+          formData.append("invoice", invoiceFile);
+        }
+
+        try {
+          const createdOrder = await api("/orders", {
+            method: "POST",
+            body: formData
+          });
+
+          showToast("Tạo đơn thành công", "success");
+          showInvoicePrintModal(createdOrder);
+          event.target.reset();
+          items = [];
+          nextItemId = 0;
+          renderItemsTable();
+        } catch (error) {
+          showToast("Lỗi: " + error.message, "error");
+        }
+      }
+
+      async function initPage() {
+        const app = document.getElementById("app");
+
+        try {
+          customers = await api("/customers");
+          products = await api("/products");
+
+          const content = `
+            <div class="gradient-header rounded-2xl p-6">
+              <h2 class="text-4xl font-bold">Tạo đơn xuất hàng</h2>
+              <p class="mt-2 text-indigo-100">Chọn khách hàng và thêm sản phẩm để tạo đơn</p>
+            </div>
+            <div class="panel p-5 mt-5">
+              <form id="orderForm" class="grid gap-4">
+                <div class="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="mb-2 block text-sm text-slate-300">Khách hàng</label>
+                    <select id="customerId" class="input-base">
+                      <option value="">-- Chọn khách hàng --</option>
+                      ${customers.map((c) => `<option value="${c._id}">${c.name}</option>`).join("")}
+                    </select>
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm text-slate-300">Ngày xuất hàng</label>
+                    <input id="exportDate" type="datetime-local" class="input-base" />
+                  </div>
+                </div>
+
+                <div class="mt-6">
+                  <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold">Sản phẩm trong đơn</h3>
+                    <button type="button" class="btn-highlight" id="addItemBtn">+ Thêm sản phẩm</button>
+                  </div>
+                  <div class="overflow-x-auto">
+                    <table class="w-full text-sm order-items-table">
+                      <thead class="order-items-head">
+                        <tr>
+                          <th class="p-3 text-left">Sản phẩm</th>
+                          <th class="p-3 text-left">Số lượng</th>
+                          <th class="p-3 text-left">Giá</th>
+                          <th class="p-3 text-right">Thành tiền</th>
+                          <th class="p-3 text-center">Thao tác</th>
+                        </tr>
+                      </thead>
+                      <tbody id="itemsTableBody">
+                      </tbody>
+                    </table>
+                  </div>
+                  <div id="itemsEmpty" class="p-4 text-center text-slate-400">Chưa có sản phẩm, nhấn "Thêm sản phẩm" để bắt đầu</div>
+                </div>
+
+                <div class="grid gap-4 md:grid-cols-2 mt-6">
+                  <div>
+                    <label class="mb-2 block text-sm text-slate-300">Ảnh hóa đơn</label>
+                    <input id="invoice" type="file" accept="image/*" class="input-base" />
+                  </div>
+                  <div class="card p-4">
+                    <p class="text-sm text-slate-400">Tổng tiền</p>
+                    <p id="grandTotalText" class="mt-2 text-2xl font-bold">0 ₫</p>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-2 border border-slate-600 rounded p-3">
+                  <input id="savePrices" type="checkbox" />
+                  <label for="savePrices" class="text-sm text-slate-300">Lưu giá này làm giá mặc định cho khách hàng</label>
+                </div>
+
+                <div>
+                  <button class="btn-primary w-full" type="submit">Lưu đơn xuất hàng</button>
+                </div>
+              </form>
+            </div>
+          `;
+
+          app.innerHTML = layoutTemplate(content, "orders");
+
+          const orderForm = document.getElementById("orderForm");
+          const customerSelect = document.getElementById("customerId");
+          const exportDateInput = document.getElementById("exportDate");
+          const addItemBtn = document.getElementById("addItemBtn");
+
+          exportDateInput.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+            .toISOString()
+            .slice(0, 16);
+
+          customerSelect.addEventListener("change", updateCustomerState);
+          addItemBtn.addEventListener("click", addItemRow);
+          orderForm.addEventListener("submit", submitOrder);
+
+          renderItemsTable();
+        } catch (error) {
+          app.innerHTML = layoutTemplate(`<div class="panel p-5 text-rose-400">${error.message}</div>`, "orders");
+        }
+      }
+
+      if (requireAuth("orders")) {
+        initPage();
+      }
+    </script>
+  </body>
+</html>

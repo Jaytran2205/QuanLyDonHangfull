@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tài khoản - Quản Lý Nội Bộ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <script type="module">
+      import { api, layoutTemplate, requireAuth, showToast } from "/assets/app.js";
+
+      let users = [];
+
+      function permissionChecks(permissions = {}, prefix = "perm") {
+        return `
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="${prefix}-dashboard" ${permissions.dashboard ? "checked" : ""}/> Dashboard</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="${prefix}-customers" ${permissions.customers ? "checked" : ""}/> Khách hàng</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="${prefix}-products" ${permissions.products ? "checked" : ""}/> Sản phẩm</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="${prefix}-orders" ${permissions.orders ? "checked" : ""}/> Đơn hàng</label>
+        `;
+      }
+
+      function readPermissions(prefix) {
+        return {
+          dashboard: document.getElementById(`${prefix}-dashboard`).checked,
+          customers: document.getElementById(`${prefix}-customers`).checked,
+          products: document.getElementById(`${prefix}-products`).checked,
+          orders: document.getElementById(`${prefix}-orders`).checked,
+          users: false
+        };
+      }
+
+      async function loadUsers() {
+        users = await api("/auth/users");
+      }
+
+      async function createAccount(event) {
+        event.preventDefault();
+        const username = document.getElementById("newUsername").value.trim();
+        const password = document.getElementById("newPassword").value;
+        const permissions = readPermissions("new");
+
+        try {
+          await api("/auth/users", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password, permissions })
+          });
+
+          showToast("Tạo tài khoản thành công", "success");
+          event.target.reset();
+          await renderPage();
+        } catch (error) {
+          showToast(error.message, "error");
+        }
+      }
+
+      async function savePermissions(userId) {
+        const permissions = readPermissions(`row-${userId}`);
+        try {
+          await api(`/auth/users/${userId}/permissions`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ permissions })
+          });
+          showToast("Cập nhật quyền thành công", "success");
+          await renderPage();
+        } catch (error) {
+          showToast(error.message, "error");
+        }
+      }
+
+      function renderUsersTable() {
+        if (!users.length) {
+          return `<tr><td colspan="4" class="py-4 text-center text-slate-400">Chưa có tài khoản</td></tr>`;
+        }
+
+        return users
+          .map((user) => {
+            if (user.role === "admin") {
+              return `
+                <tr>
+                  <td class="py-3">${user.username}</td>
+                  <td class="py-3">Admin</td>
+                  <td class="py-3">Toàn quyền</td>
+                  <td class="py-3 text-slate-400">-</td>
+                </tr>
+              `;
+            }
+
+            return `
+              <tr>
+                <td class="py-3">${user.username}</td>
+                <td class="py-3">User</td>
+                <td class="py-3">
+                  <div class="grid grid-cols-2 gap-2">
+                    ${permissionChecks(user.permissions, `row-${user._id}`)}
+                  </div>
+                </td>
+                <td class="py-3">
+                  <button class="btn-primary" data-action="save-permissions" data-id="${user._id}">Lưu quyền</button>
+                </td>
+              </tr>
+            `;
+          })
+          .join("");
+      }
+
+      async function renderPage() {
+        const app = document.getElementById("app");
+        try {
+          await loadUsers();
+
+          const content = `
+            <div class="gradient-header rounded-2xl p-6">
+              <h2 class="text-4xl font-bold">Quản lý tài khoản</h2>
+              <p class="mt-2 text-indigo-100">Admin tạo tài khoản và cấp quyền cho cấp dưới</p>
+            </div>
+
+            <div class="panel p-5 mt-5">
+              <h3 class="text-xl font-semibold mb-3">Tạo tài khoản mới</h3>
+              <form id="createUserForm" class="grid gap-3">
+                <input id="newUsername" class="input-base" placeholder="Tên đăng nhập" required />
+                <input id="newPassword" type="password" class="input-base" placeholder="Mật khẩu" required />
+                <div class="grid grid-cols-2 gap-3">${permissionChecks({}, "new")}</div>
+                <button class="btn-highlight" type="submit">Tạo tài khoản</button>
+              </form>
+            </div>
+
+            <div class="panel p-5 mt-5">
+              <h3 class="text-xl font-semibold mb-3">Danh sách tài khoản</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th class="py-2 text-left">Tên đăng nhập</th>
+                      <th class="py-2 text-left">Vai trò</th>
+                      <th class="py-2 text-left">Phân quyền</th>
+                      <th class="py-2 text-left">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${renderUsersTable()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+
+          app.innerHTML = layoutTemplate(content, "users");
+
+          document.getElementById("createUserForm").addEventListener("submit", createAccount);
+          document.querySelectorAll('[data-action="save-permissions"]').forEach((button) => {
+            button.addEventListener("click", () => savePermissions(button.dataset.id));
+          });
+        } catch (error) {
+          app.innerHTML = layoutTemplate(`<div class="panel p-5 text-rose-400">${error.message}</div>`, "users");
+        }
+      }
+
+      if (requireAuth("users")) {
+        renderPage();
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+THIEU FILE CAI MONGODB (.msi)
+
+Bo gui khach nay da co:
+- CaiNhanh.bat
+- CaiNhanh.ps1
+- QuanLyDonHang Setup 1.0.0.exe
+- deploy-windows.md
+
+Ban can bo sung them 1 file cai MongoDB Community Server dang .msi vao cung thu muc nay.
+
+Sau do khach chi can chuot phai CaiNhanh.bat -> Run as administrator.

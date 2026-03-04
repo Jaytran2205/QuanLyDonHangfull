@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard - Quản Lý Nội Bộ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <script type="module">
+      import { api, formatCurrency, layoutTemplate, showToast, showConfirm, requireAuth } from "/assets/app.js";
+
+      async function exportExcelReport() {
+        try {
+          const token = localStorage.getItem("auth_token");
+          if (!token) {
+            throw new Error("Phiên đăng nhập không hợp lệ, vui lòng đăng nhập lại");
+          }
+
+          const response = await fetch("/api/reports/export", {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${token}`
+            }
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || "Không thể xuất báo cáo");
+          }
+
+          const blob = await response.blob();
+          const baseFileName = response.headers.get("content-disposition")?.match(/filename=\"?([^\"]+)\"?/)?.[1] || "report.xlsx";
+          const now = new Date();
+          const timeSuffix = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+          const fileName = baseFileName.replace(/\.xlsx$/i, `_${timeSuffix}.xlsx`);
+
+          if (window.navigator?.msSaveOrOpenBlob) {
+            window.navigator.msSaveOrOpenBlob(blob, fileName);
+          } else if (window.showSaveFilePicker) {
+            const handle = await window.showSaveFilePicker({
+              suggestedName: fileName,
+              types: [
+                {
+                  description: "Excel file",
+                  accept: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"]
+                  }
+                }
+              ]
+            });
+
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+          } else {
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
+            setTimeout(() => {
+              window.URL.revokeObjectURL(url);
+            }, 30000);
+          }
+
+          showToast("Xuất báo cáo Excel thành công", "success");
+        } catch (error) {
+          showToast(error.message, "error");
+        }
+      }
+
+      function renderCards(summary) {
+        const cards = [
+          { label: "Tổng khách hàng", value: summary.totalCustomers },
+          { label: "Tổng đơn hàng", value: summary.totalOrders },
+          { label: "Tổng doanh thu", value: formatCurrency(summary.totalRevenue) }
+        ];
+
+        return `<div class="grid gap-4 md:grid-cols-3">
+          ${cards
+            .map(
+              (card) => `<div class="card p-5"><p class="text-sm text-slate-400">${card.label}</p><p class="mt-2 text-3xl font-bold">${card.value}</p></div>`
+            )
+            .join("")}
+        </div>`;
+      }
+
+      function renderCharts() {
+        return `
+          <div class="grid gap-5 md:grid-cols-2 mt-5">
+            <div class="card p-5">
+              <h3 class="text-lg font-semibold mb-4">Doanh thu theo khách hàng</h3>
+              <div style="position: relative; height: 280px; width: 100%;">
+                <canvas id="customerRevenueChart"></canvas>
+              </div>
+            </div>
+            <div class="card p-5">
+              <h3 class="text-lg font-semibold mb-4">Đơn hàng theo ngày</h3>
+              <div style="position: relative; height: 280px; width: 100%;">
+                <canvas id="ordersByDateChart"></canvas>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderHistory(orders) {
+        return `
+          <div class="panel p-5 mt-5">
+            <h2 class="text-xl font-semibold mb-4">Lịch sử đơn hàng</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="py-2 text-left w-12"></th>
+                    <th class="py-2 text-left">Tên khách</th>
+                    <th class="py-2 text-left">Tổng tiền</th>
+                    <th class="py-2 text-left">Ngày xuất</th>
+                    <th class="py-2 text-center">Hành động</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${orders
+                    .map((order, idx) => {
+                      const invoiceLink = order.invoiceImage 
+                        ? `<a class="text-indigo-300 underline text-sm" href="${order.invoiceImage}" target="_blank">Xem ảnh</a>`
+                        : '-';
+
+                      return `
+                        <tr class="hover:bg-slate-700" data-order-idx="${idx}">
+                          <td class="py-3 text-center cursor-pointer" onclick="toggleDetail(${idx})">
+                            <span id="detail-toggle-${idx}" class="text-indigo-400">▶</span>
+                          </td>
+                          <td class="py-3 cursor-pointer" onclick="toggleDetail(${idx})">${order.customer?.name || "-"}</td>
+                          <td class="py-3 font-semibold cursor-pointer" onclick="toggleDetail(${idx})">${formatCurrency(order.grandTotal)}</td>
+                          <td class="py-3 cursor-pointer" onclick="toggleDetail(${idx})">${new Date(order.exportDate).toLocaleString("vi-VN")}</td>
+                          <td class="py-3 text-center">
+                            <button class="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-white text-sm" onclick="deleteOrderItem('${order._id}', event)">Xóa</button>
+                          </td>
+                        </tr>
+                        <tr id="detail-${idx}" class="hidden bg-slate-700">
+                          <td colspan="5" class="py-4 px-4">
+                            <div class="space-y-2 text-sm text-slate-400">
+                              <div class="font-semibold text-white mb-3">Chi tiết sản phẩm:</div>
+                              ${order.items.map(item => `
+                                <div class="flex justify-between items-center border-b border-slate-600 pb-2">
+                                  <span>${item.productName}</span>
+                                  <span>${item.quantity} × ${formatCurrency(item.price)} = <strong class="text-slate-200">${formatCurrency(item.total)}</strong></span>
+                                </div>
+                              `).join("")}
+                              <div class="mt-4 pt-3 border-t border-slate-600 flex justify-between items-center">
+                                <span class="font-semibold">Tổng cộng:</span>
+                                <span class="text-lg font-bold text-indigo-300">${formatCurrency(order.grandTotal)}</span>
+                              </div>
+                              ${order.invoiceImage ? `<div class="mt-3"><strong>Hóa đơn:</strong> ${invoiceLink}</div>` : ''}
+                            </div>
+                          </td>
+                        </tr>
+                      `;
+                    })
+                    .join("")}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      }
+
+      async function initCharts(summary) {
+        // Load Chart.js if not available
+        if (typeof Chart === "undefined") {
+          const script = document.createElement("script");
+          script.src = "https://cdn.jsdelivr.net/npm/chart.js";
+          script.onload = () => createCharts(summary);
+          document.head.appendChild(script);
+        } else {
+          createCharts(summary);
+        }
+      }
+
+      function createCharts(summary) {
+        // Pie chart - Revenue by customer
+        const customerCtx = document.getElementById("customerRevenueChart");
+        if (customerCtx && summary.customerRevenue && summary.customerRevenue.length > 0) {
+          new Chart(customerCtx, {
+            type: "doughnut",
+            data: {
+              labels: summary.customerRevenue.map(item => item._id),
+              datasets: [{
+                label: "Doanh thu (₫)",
+                data: summary.customerRevenue.map(item => item.revenue),
+                backgroundColor: [
+                  "#4f46e5",
+                  "#7c3aed",
+                  "#db2777",
+                  "#ea580c",
+                  "#ca8a04",
+                  "#16a34a",
+                  "#0891b2"
+                ],
+                borderColor: "#1e293b",
+                borderWidth: 2
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  position: "bottom",
+                  labels: {
+                    color: "#cbd5e1",
+                    padding: 15,
+                    font: { size: 12 }
+                  }
+                }
+              }
+            }
+          });
+        }
+
+        // Bar chart - Orders by date
+        const dateCtx = document.getElementById("ordersByDateChart");
+        if (dateCtx && summary.ordersByDate && Object.keys(summary.ordersByDate).length > 0) {
+          const sortedDates = Object.keys(summary.ordersByDate).sort((a, b) => {
+            return new Date(a.split('/').reverse().join('-')) - new Date(b.split('/').reverse().join('-'));
+          });
+          
+          new Chart(dateCtx, {
+            type: "bar",
+            data: {
+              labels: sortedDates,
+              datasets: [{
+                label: "Số đơn hàng",
+                data: sortedDates.map(date => summary.ordersByDate[date]),
+                backgroundColor: "#6366f1",
+                borderColor: "#4f46e5",
+                borderRadius: 4,
+                borderWidth: 0
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              indexAxis: "x",
+              plugins: {
+                legend: {
+                  labels: { color: "#cbd5e1", font: { size: 12 } }
+                }
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  max: Math.max(...Object.values(summary.ordersByDate)) + 1,
+                  ticks: { color: "#cbd5e1", stepSize: 1 },
+                  grid: { color: "#334155", drawBorder: false }
+                },
+                x: {
+                  ticks: { color: "#cbd5e1", font: { size: 11 } },
+                  grid: { color: "#334155", drawBorder: false }
+                }
+              }
+            }
+          });
+        } else if (dateCtx) {
+          // Show placeholder if no data
+          dateCtx.parentElement.innerHTML = '<p class="text-slate-400 text-center py-8">Chưa có dữ liệu</p>';
+        }
+      }
+
+      function toggleDetail(idx) {
+        const detail = document.getElementById(`detail-${idx}`);
+        const toggle = document.getElementById(`detail-toggle-${idx}`);
+        detail.classList.toggle("hidden");
+        toggle.textContent = detail.classList.contains("hidden") ? "▶" : "▼";
+      }
+
+      window.toggleDetail = toggleDetail;
+
+      async function deleteOrderItem(orderId, event) {
+        event.stopPropagation();
+        
+        const confirmed = await showConfirm("Xóa đơn hàng", "Bạn có chắc chắn muốn xóa đơn hàng này?");
+        if (!confirmed) return;
+
+        try {
+          await api(`/orders/${orderId}`, { method: "DELETE" });
+          showToast("Xóa đơn hàng thành công", "success");
+          
+          // Refresh dashboard
+          setTimeout(() => init(), 300);
+        } catch (error) {
+          showToast(error.message, "error");
+        }
+      }
+
+      window.deleteOrderItem = deleteOrderItem;
+
+      async function init() {
+        const app = document.getElementById("app");
+        try {
+          const summary = await api("/orders/dashboard/summary");
+          const content = `
+            <div class="gradient-header rounded-2xl p-6">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 class="text-4xl font-bold">Dashboard</h2>
+                  <p class="mt-2 text-indigo-100">Tổng quan khách hàng và đơn xuất hàng</p>
+                </div>
+                <button id="exportReportBtn" class="btn-highlight">📊 Xuất báo cáo Excel</button>
+              </div>
+            </div>
+            <div class="mt-5">${renderCards(summary)}</div>
+            ${renderCharts()}
+            ${renderHistory(summary.orders)}
+          `;
+          app.innerHTML = layoutTemplate(content, "dashboard");
+          document.getElementById("exportReportBtn")?.addEventListener("click", exportExcelReport);
+
+          // Initialize charts after DOM is ready
+          setTimeout(() => initCharts(summary), 100);
+        } catch (error) {
+          app.innerHTML = layoutTemplate(`<div class="panel p-5 text-rose-400">${error.message}</div>`, "dashboard");
+        }
+      }
+
+      if (requireAuth("dashboard")) {
+        init();
+      }
+    </script>
+  </body>
+</html>

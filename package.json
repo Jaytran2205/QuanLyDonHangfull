@@ -1,0 +1,51 @@
+{
+  "name": "don-hang-noi-bo",
+  "version": "1.0.0",
+  "description": "Ung dung quan ly don hang noi bo",
+  "private": true,
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev:server": "npm run dev --prefix server",
+    "dev": "npm run dev:server",
+    "start": "npm run start --prefix server",
+    "desktop:prepare": "npm install --prefix server",
+    "desktop:dev": "npm run desktop:prepare && electron .",
+    "desktop:build": "npm run desktop:prepare && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.noibo.donhang",
+    "productName": "QuanLyDonHang",
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "server",
+        "to": "server"
+      },
+      {
+        "from": "client",
+        "to": "client"
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

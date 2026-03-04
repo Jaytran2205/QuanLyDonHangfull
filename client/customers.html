@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Khách hàng - Quản Lý Nội Bộ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <script type="module">
+      import { api, formatCurrency, layoutTemplate, showAlert, showConfirm, showToast, requireAuth } from "/assets/app.js";
+
+      let customers = [];
+      let editingId = null;
+
+      async function loadCustomers() {
+        customers = await api("/customers");
+      }
+
+      async function submitCustomer(event) {
+        event.preventDefault();
+        const form = event.target;
+        const name = form.name.value.trim();
+        const phone = form.phone.value.trim();
+
+        if (!name) {
+          await showAlert("Lỗi", "Tên khách hàng là bắt buộc");
+          return;
+        }
+
+        if (editingId) {
+          await api(`/customers/${editingId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, phone })
+          });
+        } else {
+          await api("/customers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, phone })
+          });
+        }
+
+        editingId = null;
+        form.reset();
+        await renderPage();
+      }
+
+      async function removeCustomer(id) {
+        const confirmed = await showConfirm("Xóa khách hàng", "Bạn chắc chắn muốn xóa khách hàng này?");
+        if (!confirmed) return;
+        await api(`/customers/${id}`, { method: "DELETE" });
+        await renderPage();
+      }
+
+      function editCustomer(customer) {
+        editingId = customer._id;
+        document.getElementById("name").value = customer.name;
+        document.getElementById("phone").value = customer.phone || "";
+      }
+
+      async function renderPage() {
+        const app = document.getElementById("app");
+        try {
+          await loadCustomers();
+          const content = `
+            <div class="gradient-header rounded-2xl p-6">
+              <h2 class="text-4xl font-bold">Quản lý khách hàng</h2>
+              <p class="mt-2 text-indigo-100">Thêm, sửa, xóa khách hàng</p>
+            </div>
+            <div class="panel p-5 mt-5">
+              <form id="customerForm" class="grid gap-3 md:grid-cols-3">
+                <input id="name" name="name" class="input-base" placeholder="Tên khách hàng" />
+                <input id="phone" name="phone" class="input-base" placeholder="Số điện thoại (không bắt buộc)" />
+                <button class="btn-primary" type="submit">Lưu khách hàng</button>
+              </form>
+            </div>
+            <div class="panel p-5 mt-5">
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th class="py-2 text-left">Tên khách</th>
+                      <th class="py-2 text-left">Số điện thoại</th>
+                      <th class="py-2 text-left">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${customers
+                      .map(
+                        (customer) => `<tr>
+                          <td class="py-3">${customer.name}</td>
+                          <td class="py-3">${customer.phone || "-"}</td>
+                          <td class="py-3">
+                            <button data-action="edit" data-id="${customer._id}" class="btn-muted mr-2">Sửa</button>
+                            <button data-action="delete" data-id="${customer._id}" class="btn-primary">Xóa</button>
+                          </td>
+                        </tr>`
+                      )
+                      .join("")}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+
+          app.innerHTML = layoutTemplate(content, "customers");
+          document.getElementById("customerForm").addEventListener("submit", submitCustomer);
+          document.querySelectorAll("button[data-action]").forEach((btn) => {
+            const customer = customers.find((c) => c._id === btn.dataset.id);
+            if (!customer) return;
+            if (btn.dataset.action === "edit") {
+              btn.addEventListener("click", () => editCustomer(customer));
+            }
+            if (btn.dataset.action === "delete") {
+              btn.addEventListener("click", () => removeCustomer(customer._id));
+            }
+          });
+        } catch (error) {
+          app.innerHTML = layoutTemplate(`<div class="panel p-5 text-rose-400">${error.message}</div>`, "customers");
+        }
+      }
+
+      if (requireAuth("customers")) {
+        renderPage();
+      }
+    </script>
+  </body>
+</html>

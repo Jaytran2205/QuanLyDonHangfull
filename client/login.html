@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Đăng nhập - Quản Lý Nội Bộ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <main class="min-h-screen flex items-center justify-center p-4">
+      <div class="panel p-6 w-full max-w-md">
+        <div class="gradient-header rounded-xl p-4">
+          <h1 class="text-2xl font-bold">Đăng nhập hệ thống</h1>
+          <p class="mt-1 text-sm text-indigo-100">Tài khoản mặc định: admin / 123456</p>
+        </div>
+
+        <form id="loginForm" class="mt-5 grid gap-4">
+          <div>
+            <label class="mb-2 block text-sm text-slate-300">Tên đăng nhập</label>
+            <input id="username" class="input-base" placeholder="Nhập tên đăng nhập" required />
+          </div>
+          <div>
+            <label class="mb-2 block text-sm text-slate-300">Mật khẩu</label>
+            <input id="password" type="password" class="input-base" placeholder="Nhập mật khẩu" required />
+          </div>
+          <button class="btn-primary w-full" type="submit">Đăng nhập</button>
+        </form>
+      </div>
+    </main>
+
+    <script type="module">
+      import { api, setAuthSession, showToast, getCurrentUser } from "/assets/app.js";
+
+      const existingUser = getCurrentUser();
+      if (existingUser) {
+        window.location.href = "/index.html";
+      }
+
+      const form = document.getElementById("loginForm");
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const username = document.getElementById("username").value.trim();
+        const password = document.getElementById("password").value;
+
+        try {
+          const result = await api("/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password })
+          });
+
+          setAuthSession(result.token, result.user);
+          showToast("Đăng nhập thành công", "success");
+          setTimeout(() => {
+            window.location.href = "/index.html";
+          }, 300);
+        } catch (error) {
+          showToast(error.message, "error");
+        }
+      });
+    </script>
+  </body>
+</html>
